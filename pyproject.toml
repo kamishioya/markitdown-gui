@@ -23,7 +23,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
 ]
 dependencies = [
-  "markitdown[pdf,docx,xlsx]>=0.1.6b2,<0.2.0",
+  "markitdown[pdf,docx,xlsx]>=0.1.5,<0.2.0",
   "PySide6_Essentials>=6.8.0,<7.0.0",
 ]
 
