@@ -1,0 +1,74 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+
+      - name: Run unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Run GUI smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tests/gui_smoke_batch.py
+
+      - name: Build Windows package
+        shell: cmd
+        run: build-release.cmd
+
+      - name: Choose archive name
+        id: archive
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $assetName = "MarkItDownGUI-${{ github.ref_name }}-windows-x64.zip"
+          }
+          else {
+            $assetName = "MarkItDownGUI-manual-${{ github.run_number }}-windows-x64.zip"
+          }
+          "asset_name=$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Create release archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path release/MarkItDownGUI -DestinationPath "${{ steps.archive.outputs.asset_name }}" -Force
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: markitdown-gui-windows
+          path: ${{ steps.archive.outputs.asset_name }}
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.archive.outputs.asset_name }}
+          generate_release_notes: true
