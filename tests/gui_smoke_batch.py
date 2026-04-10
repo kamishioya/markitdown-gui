@@ -4,7 +4,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import QApplication
@@ -12,11 +14,111 @@ from PySide6.QtWidgets import QApplication
 from markitdown_gui._main_window import MainWindow
 
 
-ROOT_DIR = Path(__file__).resolve().parents[3]
-TEST_FILES_DIR = ROOT_DIR / "packages" / "markitdown" / "tests" / "test_files"
-PDF_FILE = TEST_FILES_DIR / "test.pdf"
-DOCX_FILE = TEST_FILES_DIR / "test.docx"
-XLSX_FILE = TEST_FILES_DIR / "test.xlsx"
+PDF_TEXT = "MarkItDown GUI smoke test PDF sample"
+DOCX_TITLE = "MarkItDown GUI smoke test document"
+DOCX_BODY = "AutoGen enables next-generation LLM workflows through multi-agent conversation."
+XLSX_HEADERS = ["Alpha", "Beta"]
+XLSX_ROW = ["A-1", "B-1"]
+
+
+def _write_sample_pdf(path: Path) -> None:
+    escaped_text = (
+        PDF_TEXT.replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+    )
+    stream = (
+        "BT\n"
+        "/F1 12 Tf\n"
+        "72 720 Td\n"
+        f"({escaped_text}) Tj\n"
+        "ET\n"
+    )
+    stream_bytes = stream.encode("ascii")
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        f"<< /Length {len(stream_bytes)} >>\nstream\n{stream}endstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    chunks: list[bytes] = [b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"]
+    offsets: list[int] = []
+    current_offset = len(chunks[0])
+
+    for index, obj in enumerate(objects, start=1):
+        obj_bytes = f"{index} 0 obj\n{obj}\nendobj\n".encode("ascii")
+        offsets.append(current_offset)
+        chunks.append(obj_bytes)
+        current_offset += len(obj_bytes)
+
+    xref_offset = current_offset
+    xref = [f"xref\n0 {len(objects) + 1}\n".encode("ascii")]
+    xref.append(b"0000000000 65535 f \n")
+    for offset in offsets:
+        xref.append(f"{offset:010d} 00000 n \n".encode("ascii"))
+    xref.append(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    chunks.extend(xref)
+    path.write_bytes(b"".join(chunks))
+
+
+def _write_sample_docx(path: Path) -> None:
+    document_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>{escape(DOCX_TITLE)}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>{escape(DOCX_BODY)}</w:t></w:r></w:p>
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>
+'''
+    content_types_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>
+'''
+    rels_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>
+'''
+
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+
+
+def _write_sample_xlsx(path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Smoke"
+    sheet.append(XLSX_HEADERS)
+    sheet.append(XLSX_ROW)
+    workbook.save(path)
+
+
+def _create_input_files(input_dir: Path) -> tuple[Path, Path, Path]:
+    pdf_file = input_dir / "test.pdf"
+    docx_file = input_dir / "test.docx"
+    xlsx_file = input_dir / "test.xlsx"
+    _write_sample_pdf(pdf_file)
+    _write_sample_docx(docx_file)
+    _write_sample_xlsx(xlsx_file)
+    return pdf_file, docx_file, xlsx_file
 
 
 def _excel_com_available() -> bool:
@@ -55,6 +157,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="markitdown-gui-smoke-") as temp_dir:
         output_dir = Path(temp_dir)
+        input_dir = output_dir / "inputs"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        pdf_file, docx_file, xlsx_file = _create_input_files(input_dir)
         settings = QSettings(
             str(output_dir / "smoke-settings.ini"),
             QSettings.Format.IniFormat,
@@ -82,21 +187,21 @@ def main() -> int:
 
             if pdf_output.exists():
                 pdf_text = pdf_output.read_text(encoding="utf-8")
-                if "While there is contemporaneous exploration of multi-agent approaches" not in pdf_text:
+                if PDF_TEXT not in pdf_text:
                     failures.append("PDF output did not contain the expected text.")
 
             if docx_output.exists():
                 docx_text = docx_output.read_text(encoding="utf-8")
-                if "AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation" not in docx_text:
+                if DOCX_TITLE not in docx_text:
                     failures.append("DOCX output did not contain the expected text.")
-                if "# Abstract" not in docx_text:
-                    failures.append("DOCX output did not contain the expected heading.")
+                if DOCX_BODY not in docx_text:
+                    failures.append("DOCX output did not contain the expected body text.")
 
             if xlsx_output is not None and xlsx_output.exists():
                 xlsx_text = xlsx_output.read_text(encoding="utf-8")
-                if "Alpha" not in xlsx_text:
+                if XLSX_HEADERS[0] not in xlsx_text:
                     failures.append("XLSX output did not contain the expected workbook text.")
-                if "Beta" not in xlsx_text:
+                if XLSX_HEADERS[1] not in xlsx_text:
                     failures.append("XLSX output did not contain the expected column heading.")
 
             if failures:
@@ -120,9 +225,9 @@ def main() -> int:
             window._copilot_checkbox.setChecked(False)
             window._copilot_command_edit.clear()
             window._output_dir_edit.setText(str(output_dir))
-            input_paths = [str(PDF_FILE), str(DOCX_FILE)]
+            input_paths = [str(pdf_file), str(docx_file)]
             if include_xlsx:
-                input_paths.append(str(XLSX_FILE))
+                input_paths.append(str(xlsx_file))
 
             window._add_paths(input_paths)
             expected_rows = len(input_paths)
