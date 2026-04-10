@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = "MIT"
 keywords = ["markitdown", "gui", "pyside6", "windows", "markdown"]
 authors = [
-  { name = "kamishioya" },
+  { name = "reiwasoft" },
 ]
 classifiers = [
   "Development Status :: 4 - Beta",

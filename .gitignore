@@ -6,7 +6,9 @@ __pycache__/
 .eggs/
 
 .venv/
+.venv*/
 venv/
+venv*/
 .env
 
 .pytest_cache/
